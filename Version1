@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Frequency Response Export</title>
+  <title>EQ Combined Frequency Response Export</title>
   <style>
     body {
       font-family: Arial, sans-serif;
@@ -29,13 +29,33 @@
     input[type="range"] {
       width: 90%;
     }
+    #console {
+      background-color: #1e1e1e;
+      color: #ffffff;
+      font-family: monospace;
+      font-size: 14px;
+      padding: 10px;
+      margin-top: 20px;
+      height: 200px;
+      overflow-y: auto;
+      border: 1px solid #444;
+    }
+    .log {
+      color: #9cdcfe;
+    }
+    .warn {
+      color: #dcdcaa;
+    }
+    .error {
+      color: #f48771;
+    }
   </style>
 </head>
 <body>
-  <h1>Frequency Response Export</h1>
+  <h1>EQ Combined Frequency Response Export</h1>
   <button id="playPauseButton">Play Band-Passed Pink Noise</button>
   <button id="nextButton" disabled>Next</button>
-  <button id="exportButton" disabled>Export Frequency Response</button>
+  <button id="exportButton" disabled>Export EQ Frequency Response</button>
 
   <div class="slider-container">
     <label for="preampSlider">Preamp (-15 dB to +15 dB)</label>
@@ -46,146 +66,83 @@
     <!-- EQ sliders will be dynamically added here -->
   </div>
 
+  <div id="console">
+    <strong>On-Screen Developer Console</strong>
+    <div id="consoleContent"></div>
+  </div>
+
   <script>
     const playPauseButton = document.getElementById('playPauseButton');
     const nextButton = document.getElementById('nextButton');
     const exportButton = document.getElementById('exportButton');
     const preampSlider = document.getElementById('preampSlider');
     const eqSlidersContainer = document.getElementById('eqSlidersContainer');
+    const consoleContent = document.getElementById('consoleContent');
 
     let audioContext;
-    let pinkNoiseBuffer;
     let pinkNoiseSource;
     let preampGain;
-    let bandPassFilter;
-    let analyser;
-    let eqBands = [];
-    let currentBandIndex = 0; // To track the current EQ slider for band-pass filtering
-    let isPlaying = false;
-
-    // Generate frequencies for 1/12th octave from 20 Hz to 20 kHz
+    let eqFilters = [];
     const eqFrequencies = [];
     const f0 = 20; // Starting frequency (20 Hz)
     const fMax = 20000; // Maximum frequency (20 kHz)
-    let n = 0;
+    const resolution = 20; // Frequency resolution in Hz
+    let isPlaying = false;
 
-    while (true) {
-      const freq = f0 * Math.pow(2, n / 12);
-      if (freq > fMax) break;
-      eqFrequencies.push(freq);
-      n++;
+    function logToConsole(message, type = 'log') {
+      const logEntry = document.createElement('div');
+      logEntry.className = type;
+      logEntry.textContent = `[${type.toUpperCase()}] ${message}`;
+      consoleContent.appendChild(logEntry);
+      consoleContent.scrollTop = consoleContent.scrollHeight;
     }
 
-    function generatePinkNoiseBuffer() {
-      const sampleRate = audioContext.sampleRate;
-      const bufferSize = sampleRate * 2; // 2 seconds of pink noise
-      const buffer = audioContext.createBuffer(1, bufferSize, sampleRate);
+    // Generate EQ frequencies
+    for (let freq = f0; freq <= fMax; freq += resolution) {
+      eqFrequencies.push(freq);
+    }
+    logToConsole("EQ frequencies generated.");
+
+    function setupAudioContext() {
+      audioContext = new (window.AudioContext || window.webkitAudioContext)();
+      logToConsole("Audio context initialized.");
+    }
+
+    function setupPinkNoise() {
+      const bufferSize = audioContext.sampleRate * 2; // 2 seconds of noise
+      const buffer = audioContext.createBuffer(1, bufferSize, audioContext.sampleRate);
       const output = buffer.getChannelData(0);
 
-      let b0 = 0, b1 = 0, b2 = 0, b3 = 0, b4 = 0, b5 = 0, b6 = 0;
       for (let i = 0; i < bufferSize; i++) {
-        const white = Math.random() * 2 - 1;
-        b0 = 0.99886 * b0 + white * 0.0555179;
-        b1 = 0.99332 * b1 + white * 0.0750759;
-        b2 = 0.96900 * b2 + white * 0.1538520;
-        b3 = 0.86650 * b3 + white * 0.3104856;
-        b4 = 0.55000 * b4 + white * 0.5329522;
-        b5 = -0.7616 * b5 - white * 0.0168980;
-        output[i] = b0 + b1 + b2 + b3 + b4 + b5 + b6 + white * 0.5362;
-        output[i] *= 0.11; // Normalize volume
-        b6 = white * 0.115926;
+        output[i] = Math.random() * 2 - 1; // White noise
       }
 
-      return buffer;
-    }
-
-    function setupAudioGraph() {
-      audioContext = new (window.AudioContext || window.webkitAudioContext)();
-
-      pinkNoiseBuffer = generatePinkNoiseBuffer();
-
       pinkNoiseSource = audioContext.createBufferSource();
-      pinkNoiseSource.buffer = pinkNoiseBuffer;
+      pinkNoiseSource.buffer = buffer;
       pinkNoiseSource.loop = true;
 
       preampGain = audioContext.createGain();
       preampGain.gain.value = Math.pow(10, preampSlider.value / 20);
 
-      bandPassFilter = audioContext.createBiquadFilter();
-      bandPassFilter.type = 'bandpass';
-      bandPassFilter.frequency.value = eqFrequencies[currentBandIndex];
-      bandPassFilter.Q.value = 12;
-
-      analyser = audioContext.createAnalyser();
-      analyser.fftSize = 32768;
-
-      bandPassFilter.connect(preampGain);
-      preampGain.connect(analyser);
-      analyser.connect(audioContext.destination);
-      pinkNoiseSource.connect(bandPassFilter);
+      pinkNoiseSource.connect(preampGain);
+      preampGain.connect(audioContext.destination);
+      logToConsole("Pink noise source and preamp setup completed.");
     }
 
-    function togglePlayPause() {
-      if (!isPlaying) {
-        if (!audioContext) {
-          setupAudioGraph();
-        }
-        pinkNoiseSource.start(0);
-        playPauseButton.textContent = 'Pause Band-Passed Pink Noise';
-        nextButton.disabled = false;
-        exportButton.disabled = false; // Enable export button
-        isPlaying = true;
-      } else {
-        pinkNoiseSource.stop();
-        audioContext.close();
-        audioContext = null;
-        playPauseButton.textContent = 'Play Band-Passed Pink Noise';
-        nextButton.disabled = true;
-        exportButton.disabled = true; // Disable export button
-        isPlaying = false;
-      }
-    }
-
-    function exportFrequencyResponse() {
-      if (!audioContext || !analyser) {
-        alert('Please start playback to initialize the audio context.');
-        return;
-      }
-
-      try {
-        const frequencyData = new Float32Array(analyser.frequencyBinCount);
-        analyser.getFloatFrequencyData(frequencyData);
-
-        let csvContent = "Frequency (Hz),Amplitude (dB)\n";
-        const nyquist = audioContext.sampleRate / 2;
-        const increment = nyquist / analyser.frequencyBinCount;
-
-        for (let i = 0; i < analyser.frequencyBinCount; i++) {
-          const frequency = i * increment;
-          if (frequency >= 20 && frequency <= 20000) {
-            csvContent += `${frequency.toFixed(2)},${frequencyData[i].toFixed(2)}\n`;
-          }
-        }
-
-        if (csvContent.split("\n").length <= 2) {
-          alert('Frequency data could not be captured. Ensure playback is active.');
-          return;
-        }
-
-        const blob = new Blob([csvContent], { type: 'text/csv' });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = 'frequency_response.csv';
-        a.click();
-        URL.revokeObjectURL(url);
-      } catch (error) {
-        console.error('Error exporting frequency response:', error);
-        alert('An error occurred while exporting the frequency response.');
-      }
+    function setupEQFilters() {
+      eqFilters = eqFrequencies.map(freq => {
+        const filter = audioContext.createBiquadFilter();
+        filter.type = 'peaking';
+        filter.frequency.value = freq;
+        filter.Q.value = 12;
+        filter.gain.value = 0; // Default gain
+        return filter;
+      });
+      logToConsole("EQ filters created.");
     }
 
     function createEQSliders() {
+      eqSlidersContainer.innerHTML = ""; // Clear any existing sliders
       eqFrequencies.forEach((freq, index) => {
         const container = document.createElement('div');
         container.className = 'slider-container';
@@ -202,28 +159,103 @@
         slider.step = 0.1;
         slider.value = 0;
 
+        slider.addEventListener('input', () => {
+          eqFilters[index].gain.value = parseFloat(slider.value);
+          logToConsole(`EQ slider at ${freq} Hz set to ${slider.value} dB.`);
+        });
+
         container.appendChild(label);
         container.appendChild(slider);
         eqSlidersContainer.appendChild(container);
       });
+
+      logToConsole("EQ sliders created.");
+    }
+
+    function calculateCombinedFrequencyResponse() {
+      const frequencies = new Float32Array(eqFrequencies.length);
+      const magResponse = new Float32Array(eqFrequencies.length);
+      const phaseResponse = new Float32Array(eqFrequencies.length);
+
+      eqFrequencies.forEach((freq, index) => {
+        frequencies[index] = freq;
+      });
+
+      const combinedResponse = new Float32Array(eqFrequencies.length).fill(0);
+
+      eqFilters.forEach(filter => {
+        filter.getFrequencyResponse(frequencies, magResponse, phaseResponse);
+        magResponse.forEach((mag, index) => {
+          combinedResponse[index] += 20 * Math.log10(mag); // Convert magnitude to dB and combine
+        });
+      });
+
+      return { frequencies, combinedResponse };
+    }
+
+    function exportEQFrequencyResponse() {
+      if (!audioContext) {
+        alert('Please initialize playback first.');
+        logToConsole("Playback not initialized. Cannot export EQ response.", "warn");
+        return;
+      }
+
+      const { frequencies, combinedResponse } = calculateCombinedFrequencyResponse();
+
+      let csvContent = "Frequency (Hz),Combined Gain (dB)\n";
+      frequencies.forEach((freq, index) => {
+        csvContent += `${freq.toFixed(2)},${combinedResponse[index].toFixed(2)}\n`;
+      });
+
+      const blob = new Blob([csvContent], { type: 'text/csv' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'combined_eq_frequency_response.csv';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+
+      logToConsole("Combined EQ frequency response exported successfully.");
     }
 
     preampSlider.addEventListener('input', () => {
       if (preampGain) {
         preampGain.gain.value = Math.pow(10, preampSlider.value / 20);
+        logToConsole(`Preamp slider set to ${preampSlider.value} dB.`);
       }
     });
-    playPauseButton.addEventListener('click', togglePlayPause);
-    nextButton.addEventListener('click', () => {
-      if (audioContext && bandPassFilter) {
-        currentBandIndex = (currentBandIndex + 1) % eqFrequencies.length;
-        bandPassFilter.frequency.value = eqFrequencies[currentBandIndex];
-      }
-    });
-    exportButton.addEventListener('click', exportFrequencyResponse);
 
-    // Create EQ sliders on page load
-    createEQSliders();
+    playPauseButton.addEventListener('click', () => {
+      if (!isPlaying) {
+        if (!audioContext) {
+          setupAudioContext();
+          setupPinkNoise();
+          setupEQFilters();
+          createEQSliders();
+        }
+        pinkNoiseSource.start(0);
+        playPauseButton.textContent = 'Pause Band-Passed Pink Noise';
+        nextButton.disabled = false;
+        exportButton.disabled = false;
+        isPlaying = true;
+        logToConsole("Playback started.");
+      } else {
+        pinkNoiseSource.stop();
+        audioContext.close();
+        audioContext = null;
+        playPauseButton.textContent = 'Play Band-Passed Pink Noise';
+        nextButton.disabled = true;
+        exportButton.disabled = true;
+        isPlaying = false;
+        logToConsole("Playback stopped.");
+      }
+    });
+
+    exportButton.addEventListener('click', exportEQFrequencyResponse);
+
+    logToConsole("Application initialized.");
   </script>
 </body>
 </html>
